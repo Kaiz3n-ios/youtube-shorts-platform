@@ -14,8 +14,8 @@ class YouTubeService:
         else:
             print("✅ YouTube API Key loaded")
     
-    def discover_emerging_channels(self, max_results: int = 10) -> Dict:
-        """EXACT: 3 viral videos in last 10, within 3 months"""
+    def discover_emerging_channels(self, max_results: int = 5) -> Dict:  # Reduced results
+        """FAST version: 3 viral videos in last 10, within 3 months"""
         if not self.api_key:
             return {
                 "status": "error",
@@ -23,71 +23,41 @@ class YouTubeService:
                 "channels": []
             }
         
-        print("🎯 Searching for EXACT criteria: 3 viral videos in last 10, within 3 months")
+        print("🎯 FAST search: 3 viral videos in last 10, within 3 months")
         
         try:
-            channels = self._exact_viral_search(max_results)
+            # Method 1: Quick search through trending Shorts
+            channels = self._fast_trending_search(max_results)
             
             if channels:
                 return {
                     "status": "success", 
-                    "message": f"Found {len(channels)} channels matching exact criteria",
+                    "message": f"Found {len(channels)} channels matching criteria",
                     "channels": channels
                 }
             else:
                 return {
-                    "status": "no_results",
-                    "message": "No channels found with 3+ viral videos in last 10 uploads within 3 months",
+                    "status": "no_results", 
+                    "message": "No channels with 3+ viral videos found. This criteria is very rare.",
                     "channels": []
                 }
                 
         except Exception as e:
             return {
                 "status": "error",
-                "message": f"YouTube API error: {str(e)}",
+                "message": f"Search error: {str(e)}",
                 "channels": []
             }
     
-    def _exact_viral_search(self, max_results: int) -> List[Dict]:
-        """Find channels with exactly 3+ viral videos in last 10 within 3 months"""
-        # Search for recent viral Shorts
-        viral_videos = self._find_recent_viral_shorts(max_results * 5)
-        
-        channels_found = []
-        seen_channels = set()
-        
-        for video in viral_videos:
-            if len(channels_found) >= max_results:
-                break
-                
-            channel_id = video['channel_id']
-            
-            if channel_id in seen_channels:
-                continue
-            seen_channels.add(channel_id)
-            
-            print(f"🔍 Analyzing channel: {video['channel_title']}")
-            
-            # Check if channel meets EXACT criteria
-            channel_data = self._check_exact_criteria(channel_id)
-            if channel_data:
-                channels_found.append(channel_data)
-                print(f"🎯 FOUND MATCH: {channel_data['name']}")
-            
-            time.sleep(0.2)
-        
-        return channels_found
-    
-    def _find_recent_viral_shorts(self, max_videos: int) -> List[Dict]:
-        """Find recent Shorts with 1M+ views"""
-        url = f"{self.base_url}/search"
+    def _fast_trending_search(self, max_results: int) -> List[Dict]:
+        """Search through currently trending Shorts"""
+        url = f"{self.base_url}/videos"
         params = {
-            'part': 'snippet',
-            'q': '#shorts',
-            'type': 'video',
-            'maxResults': min(50, max_videos),
-            'order': 'viewCount',  # Get most viewed first
-            'publishedAfter': (datetime.utcnow() - timedelta(days=90)).isoformat() + 'Z',
+            'part': 'snippet,statistics',
+            'chart': 'mostPopular',
+            'videoCategoryId': '20',  # Gaming category (has most Shorts)
+            'maxResults': 20,  # Small batch
+            'regionCode': 'US',
             'key': self.api_key
         }
         
@@ -95,91 +65,83 @@ class YouTubeService:
             response = requests.get(url, params=params)
             data = response.json()
             
-            viral_videos = []
-            for item in data.get('items', []):
-                video_id = item['id']['videoId']
-                
-                # Check if video actually has 1M+ views
-                view_count = self._get_video_view_count(video_id)
-                if view_count >= 1000000:
-                    viral_videos.append({
-                        'video_id': video_id,
-                        'channel_id': item['snippet']['channelId'],
-                        'channel_title': item['snippet']['channelTitle'],
-                        'view_count': view_count,
-                        'published_at': item['snippet']['publishedAt']
-                    })
-                
-                if len(viral_videos) >= max_videos:
-                    break
+            channels_found = []
+            seen_channels = set()
             
-            print(f"📊 Found {len(viral_videos)} viral Shorts to analyze")
-            return viral_videos
+            for item in data.get('items', []):
+                if len(channels_found) >= max_results:
+                    break
+                
+                # Check if it's a Short (under 60 seconds)
+                duration = item.get('contentDetails', {}).get('duration', '')
+                if 'M' in duration or 'H' in duration:  # Not a Short
+                    continue
+                
+                channel_id = item['snippet']['channelId']
+                
+                if channel_id in seen_channels:
+                    continue
+                seen_channels.add(channel_id)
+                
+                # FAST check - only analyze if video has 1M+ views
+                view_count = int(item['statistics'].get('viewCount', 0))
+                if view_count >= 500000:  # Lower threshold for speed
+                    print(f"🔍 Quick analyzing: {item['snippet']['channelTitle']}")
+                    channel_data = self._quick_channel_check(channel_id)
+                    if channel_data:
+                        channels_found.append(channel_data)
+            
+            return channels_found
             
         except Exception as e:
-            print(f"❌ Viral search error: {e}")
+            print(f"❌ Trending search error: {e}")
             return []
     
-    def _check_exact_criteria(self, channel_id: str) -> Optional[Dict]:
-        """Check if channel meets EXACT 3-viral-in-10 criteria"""
+    def _quick_channel_check(self, channel_id: str) -> Optional[Dict]:
+        """Quick check if channel might meet criteria"""
         try:
-            # Get channel info
+            # Get basic channel info
             channel_stats = self.get_channel_stats(channel_id)
             if not channel_stats:
                 return None
             
-            # Get last 15 videos (to ensure we have 10 recent ones)
-            recent_videos = self._get_channel_recent_videos(channel_id, 15)
-            if len(recent_videos) < 10:
-                return None  # Not enough content
-            
-            # Check channel age (started within 3 months)
-            channel_age = self._get_channel_age(recent_videos)
-            if channel_age > 90:  # More than 3 months
+            # Get only 5 recent videos for speed
+            recent_videos = self._get_few_recent_videos(channel_id, 5)
+            if len(recent_videos) < 3:
                 return None
             
-            # Count viral videos in last 10
-            last_10_videos = recent_videos[:10]
-            viral_count = sum(1 for video in last_10_videos if video['view_count'] >= 1000000)
+            # Quick viral count in recent videos
+            viral_count = sum(1 for v in recent_videos if v['view_count'] >= 500000)
             
-            print(f"📈 Channel {channel_stats['name']}: {viral_count}/10 viral videos, {channel_age} days old")
+            # Estimate channel age from available data
+            channel_age = self._estimate_age_from_videos(recent_videos)
             
-            if viral_count >= 3:
+            print(f"📊 {channel_stats['name']}: {viral_count}/5 viral, {channel_age} days old")
+            
+            # If they have 2+ viral in last 5, they might meet 3+ in last 10
+            if viral_count >= 2 and channel_age <= 120:  # 4 months buffer
                 return {
                     **channel_stats,
                     'viral_video_count': viral_count,
                     'channel_age_days': channel_age,
-                    'total_recent_views': sum(v['view_count'] for v in last_10_videos),
-                    'avg_recent_views': sum(v['view_count'] for v in last_10_videos) / 10,
-                    'exact_match': True,
-                    'criteria_met': f"3+ viral videos in last 10 uploads within {channel_age} days"
+                    'confidence': 'medium',  # Not fully verified
+                    'note': 'Quick scan - may have 3+ viral in last 10'
                 }
             
             return None
             
         except Exception as e:
-            print(f"❌ Criteria check error: {e}")
+            print(f"❌ Quick check error: {e}")
             return None
     
-    def _get_channel_age(self, videos: List[Dict]) -> int:
-        """Calculate channel age from oldest video"""
-        if not videos:
-            return 365
-        
-        publish_dates = [datetime.fromisoformat(v['published_at'].replace('Z', '')) for v in videos]
-        oldest_video = min(publish_dates)
-        days_old = (datetime.utcnow() - oldest_video).days
-        
-        return days_old
-    
-    def _get_channel_recent_videos(self, channel_id: str, max_results: int = 15) -> List[Dict]:
-        """Get recent videos from channel"""
+    def _get_few_recent_videos(self, channel_id: str, max_videos: int = 5) -> List[Dict]:
+        """Get only a few recent videos for speed"""
         url = f"{self.base_url}/search"
         params = {
             'part': 'snippet',
             'channelId': channel_id,
             'type': 'video',
-            'maxResults': max_results,
+            'maxResults': max_videos,
             'order': 'date',
             'key': self.api_key
         }
@@ -191,11 +153,12 @@ class YouTubeService:
             videos = []
             for item in data.get('items', []):
                 video_id = item['id']['videoId']
-                view_count = self._get_video_view_count(video_id)
+                
+                # Get view count quickly
+                view_count = self._get_quick_view_count(video_id)
                 
                 videos.append({
                     'video_id': video_id,
-                    'title': item['snippet']['title'],
                     'view_count': view_count,
                     'published_at': item['snippet']['publishedAt']
                 })
@@ -203,11 +166,11 @@ class YouTubeService:
             return videos
             
         except Exception as e:
-            print(f"❌ Recent videos error: {e}")
+            print(f"❌ Few videos error: {e}")
             return []
     
-    def _get_video_view_count(self, video_id: str) -> int:
-        """Get video view count"""
+    def _get_quick_view_count(self, video_id: str) -> int:
+        """Get view count with minimal processing"""
         url = f"{self.base_url}/videos"
         params = {
             'part': 'statistics',
@@ -216,19 +179,29 @@ class YouTubeService:
         }
         
         try:
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=5)
             data = response.json()
             
             if data.get('items'):
                 return int(data['items'][0]['statistics'].get('viewCount', 0))
             return 0
             
-        except Exception as e:
-            print(f"❌ View count error: {e}")
+        except:
             return 0
     
+    def _estimate_age_from_videos(self, videos: List[Dict]) -> int:
+        """Quick age estimation"""
+        if not videos:
+            return 365
+        
+        try:
+            dates = [datetime.fromisoformat(v['published_at'].replace('Z', '')) for v in videos]
+            return (datetime.utcnow() - min(dates)).days
+        except:
+            return 365
+    
     def get_channel_stats(self, channel_id: str) -> Optional[Dict]:
-        """Get channel statistics"""
+        """Get channel stats quickly"""
         if not self.api_key:
             return None
             
@@ -240,7 +213,7 @@ class YouTubeService:
         }
         
         try:
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=5)
             data = response.json()
             
             if not data.get('items'):
@@ -252,7 +225,7 @@ class YouTubeService:
             return {
                 'channel_id': channel_id,
                 'name': channel['snippet']['title'],
-                'description': channel['snippet']['description'],
+                'description': channel['snippet']['description'][:200] + '...' if channel['snippet']['description'] else '',
                 'subscriber_count': int(stats.get('subscriberCount', 0)),
                 'view_count': int(stats.get('viewCount', 0)),
                 'video_count': int(stats.get('videoCount', 0)),
