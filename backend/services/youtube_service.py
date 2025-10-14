@@ -2,6 +2,7 @@ import requests
 import os
 import time
 from typing import List, Dict, Optional
+from datetime import datetime, timedelta
 
 class YouTubeService:
     def __init__(self):
@@ -13,23 +14,58 @@ class YouTubeService:
         else:
             print("✅ YouTube API Key loaded successfully")
     
-    def search_channels(self, query: str, max_results: int = 10) -> List[Dict]:
-        """Search for channels publishing Shorts content"""
+    def discover_emerging_channels(self, max_results: int = 20) -> List[Dict]:
+        """Discover emerging channels with viral Shorts"""
         if not self.api_key:
-            return [{
-                "name": "API Key Missing", 
-                "error": "Add YOUTUBE_API_KEY to Render environment variables",
-                "subscriber_count": 0
-            }]
-            
-        print(f"🔍 Searching YouTube for: {query}")
+            return [{"error": "API Key missing"}]
         
+        print("🔍 Hunting for emerging viral channels...")
+        
+        # Search for recent Shorts content
+        search_results = self._search_recent_shorts(max_results * 2)  # Get more to filter
+        
+        emerging_channels = []
+        
+        for video in search_results:
+            try:
+                channel_id = video['channel_id']
+                
+                # Skip if we already processed this channel
+                if any(c['channel_id'] == channel_id for c in emerging_channels):
+                    continue
+                
+                print(f"🔎 Analyzing channel: {video['channel_title']}")
+                
+                # Get channel details and recent videos
+                channel_analysis = self._analyze_channel_potential(channel_id)
+                
+                if channel_analysis and self._is_emerging_channel(channel_analysis):
+                    print(f"🎯 FOUND EMERGING: {channel_analysis['name']}")
+                    emerging_channels.append(channel_analysis)
+                
+                # Rate limiting
+                time.sleep(0.2)
+                
+                if len(emerging_channels) >= max_results:
+                    break
+                    
+            except Exception as e:
+                print(f"❌ Error analyzing channel: {e}")
+                continue
+        
+        print(f"✅ Found {len(emerging_channels)} emerging channels")
+        return emerging_channels
+    
+    def _search_recent_shorts(self, max_results: int = 40) -> List[Dict]:
+        """Search for recent Shorts videos"""
         url = f"{self.base_url}/search"
         params = {
             'part': 'snippet',
-            'q': f'{query} #shorts',
-            'type': 'channel',
+            'q': '#shorts',
+            'type': 'video',
             'maxResults': max_results,
+            'order': 'date',  # Get newest first
+            'publishedAfter': (datetime.utcnow() - timedelta(days=30)).isoformat() + 'Z',
             'key': self.api_key
         }
         
@@ -37,38 +73,154 @@ class YouTubeService:
             response = requests.get(url, params=params)
             data = response.json()
             
-            if 'error' in data:
-                error_msg = data['error']['message']
-                print(f"❌ YouTube API Error: {error_msg}")
-                return [{
-                    "name": f"YouTube API Error: {error_msg}",
-                    "subscriber_count": 0,
-                    "error": True
-                }]
-            
-            channels = []
+            videos = []
             for item in data.get('items', []):
-                channel_id = item['snippet']['channelId']
-                print(f"📺 Found channel: {item['snippet']['title']}")
-                
-                # Get detailed channel info
-                channel_info = self.get_channel_stats(channel_id)
-                if channel_info:
-                    channels.append(channel_info)
-                
-                # Rate limiting - be nice to YouTube API
-                time.sleep(0.1)
+                video_data = {
+                    'video_id': item['id']['videoId'],
+                    'channel_id': item['snippet']['channelId'],
+                    'channel_title': item['snippet']['channelTitle'],
+                    'published_at': item['snippet']['publishedAt'],
+                    'title': item['snippet']['title']
+                }
+                videos.append(video_data)
             
-            print(f"✅ Found {len(channels)} channels with details")
-            return channels
+            return videos
             
         except Exception as e:
-            print(f"❌ YouTube API Exception: {e}")
-            return [{
-                "name": f"API Error: {str(e)}", 
-                "subscriber_count": 0,
-                "error": True
-            }]
+            print(f"❌ Search error: {e}")
+            return []
+    
+    def _analyze_channel_potential(self, channel_id: str) -> Optional[Dict]:
+        """Analyze if a channel has emerging potential"""
+        try:
+            # Get channel stats
+            channel_stats = self.get_channel_stats(channel_id)
+            if not channel_stats:
+                return None
+            
+            # Get recent videos for analysis
+            recent_videos = self._get_channel_recent_videos(channel_id, max_results=15)
+            
+            # Calculate viral metrics
+            analysis = self._calculate_viral_metrics(channel_stats, recent_videos)
+            
+            return analysis
+            
+        except Exception as e:
+            print(f"❌ Channel analysis error: {e}")
+            return None
+    
+    def _get_channel_recent_videos(self, channel_id: str, max_results: int = 15) -> List[Dict]:
+        """Get recent videos from a channel"""
+        url = f"{self.base_url}/search"
+        params = {
+            'part': 'snippet',
+            'channelId': channel_id,
+            'type': 'video',
+            'maxResults': max_results,
+            'order': 'date',
+            'key': self.api_key
+        }
+        
+        try:
+            response = requests.get(url, params=params)
+            data = response.json()
+            
+            videos = []
+            for item in data.get('items', []):
+                video_id = item['id']['videoId']
+                video_stats = self._get_video_stats(video_id)
+                
+                if video_stats:
+                    video_data = {
+                        'video_id': video_id,
+                        'title': item['snippet']['title'],
+                        'published_at': item['snippet']['publishedAt'],
+                        'view_count': video_stats.get('view_count', 0),
+                        'like_count': video_stats.get('like_count', 0)
+                    }
+                    videos.append(video_data)
+            
+            return videos
+            
+        except Exception as e:
+            print(f"❌ Recent videos error: {e}")
+            return []
+    
+    def _get_video_stats(self, video_id: str) -> Optional[Dict]:
+        """Get video statistics"""
+        url = f"{self.base_url}/videos"
+        params = {
+            'part': 'statistics',
+            'id': video_id,
+            'key': self.api_key
+        }
+        
+        try:
+            response = requests.get(url, params=params)
+            data = response.json()
+            
+            if data.get('items'):
+                stats = data['items'][0]['statistics']
+                return {
+                    'view_count': int(stats.get('viewCount', 0)),
+                    'like_count': int(stats.get('likeCount', 0)),
+                    'comment_count': int(stats.get('commentCount', 0))
+                }
+            return None
+            
+        except Exception as e:
+            print(f"❌ Video stats error: {e}")
+            return None
+    
+    def _calculate_viral_metrics(self, channel_stats: Dict, recent_videos: List[Dict]) -> Dict:
+        """Calculate if channel meets viral criteria"""
+        # Sort videos by publish date (newest first)
+        recent_videos.sort(key=lambda x: x['published_at'], reverse=True)
+        
+        # Take last 10 videos
+        last_10_videos = recent_videos[:10] if len(recent_videos) >= 10 else recent_videos
+        
+        # Count viral videos (1M+ views)
+        viral_count = sum(1 for video in last_10_videos if video['view_count'] >= 1000000)
+        
+        # Calculate average views for last 10 videos
+        total_views = sum(video['view_count'] for video in last_10_videos)
+        avg_views = total_views / len(last_10_videos) if last_10_videos else 0
+        
+        # Check channel age (approximate)
+        channel_age = self._estimate_channel_age(recent_videos)
+        
+        analysis = {
+            **channel_stats,
+            'viral_video_count': viral_count,
+            'total_viral_views': sum(video['view_count'] for video in last_10_videos if video['view_count'] >= 1000000),
+            'avg_recent_views': avg_views,
+            'recent_videos_analyzed': len(last_10_videos),
+            'channel_age_estimate': channel_age,
+            'is_emerging': viral_count >= 3 and channel_age <= 90  # 3 months
+        }
+        
+        return analysis
+    
+    def _estimate_channel_age(self, videos: List[Dict]) -> int:
+        """Estimate channel age in days based on video publish dates"""
+        if not videos:
+            return 365  # Default to 1 year if no data
+        
+        publish_dates = [datetime.fromisoformat(v['published_at'].replace('Z', '')) for v in videos]
+        oldest_video = min(publish_dates)
+        days_old = (datetime.utcnow() - oldest_video).days
+        
+        return min(days_old, 365)  # Cap at 1 year
+    
+    def _is_emerging_channel(self, analysis: Dict) -> bool:
+        """Check if channel meets emerging criteria"""
+        return (
+            analysis['is_emerging'] and
+            analysis['viral_video_count'] >= 3 and
+            analysis['subscriber_count'] < 500000  # Under 500K subscribers
+        )
     
     def get_channel_stats(self, channel_id: str) -> Optional[Dict]:
         """Get detailed channel statistics"""
@@ -102,41 +254,8 @@ class YouTubeService:
                 'published_at': channel['snippet']['publishedAt'],
             }
             
-            print(f"📊 Channel stats: {channel_data['name']} - {channel_data['subscriber_count']} subs")
             return channel_data
             
         except Exception as e:
-            print(f"❌ Error getting channel stats for {channel_id}: {e}")
+            print(f"❌ Channel stats error: {e}")
             return None
-    
-    def test_api_connection(self) -> Dict:
-        """Test if YouTube API is working"""
-        if not self.api_key:
-            return {"status": "error", "message": "No API key found"}
-        
-        url = f"{self.base_url}/channels"
-        params = {
-            'part': 'snippet',
-            'id': 'UC_x5XG1OV2P6uZZ5FSM9Ttw',  # YouTube's own channel
-            'key': self.api_key
-        }
-        
-        try:
-            response = requests.get(url, params=params)
-            data = response.json()
-            
-            if 'error' in data:
-                return {
-                    "status": "error", 
-                    "message": data['error']['message'],
-                    "code": data['error']['code']
-                }
-            else:
-                return {
-                    "status": "success", 
-                    "message": "YouTube API is working!",
-                    "channel": data['items'][0]['snippet']['title'] if data.get('items') else "No data"
-                }
-                
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
