@@ -14,15 +14,15 @@ class YouTubeService:
         else:
             print("✅ YouTube API Key loaded")
     
-    def discover_emerging_channels(self, max_results: int = 5) -> Dict:  # Reduced results
-        """FAST version: 3 viral videos in last 10, within 3 months"""
+    def discover_emerging_channels(self, max_results: int = 5) -> Dict:
+        """ALWAYS return dict with status, message, channels"""
         if not self.api_key:
             return {
                 "status": "error",
-                "message": "YouTube API key not configured",
+                "message": "YouTube API key not configured", 
                 "channels": []
             }
-        
+    
         print("🎯 FAST search: 3 viral videos in last 10, within 3 months")
         
         try:
@@ -56,14 +56,19 @@ class YouTubeService:
             'part': 'snippet,statistics',
             'chart': 'mostPopular',
             'videoCategoryId': '20',  # Gaming category (has most Shorts)
-            'maxResults': 20,  # Small batch
+            'maxResults': 15,  # Small batch
             'regionCode': 'US',
             'key': self.api_key
         }
         
         try:
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=10)
             data = response.json()
+            
+            # Check for API errors
+            if 'error' in data:
+                error_msg = data['error']['message']
+                raise Exception(f"YouTube API: {error_msg}")
             
             channels_found = []
             seen_channels = set()
@@ -72,24 +77,22 @@ class YouTubeService:
                 if len(channels_found) >= max_results:
                     break
                 
-                # Check if it's a Short (under 60 seconds)
-                duration = item.get('contentDetails', {}).get('duration', '')
-                if 'M' in duration or 'H' in duration:  # Not a Short
-                    continue
-                
-                channel_id = item['snippet']['channelId']
-                
-                if channel_id in seen_channels:
-                    continue
-                seen_channels.add(channel_id)
-                
-                # FAST check - only analyze if video has 1M+ views
-                view_count = int(item['statistics'].get('viewCount', 0))
-                if view_count >= 500000:  # Lower threshold for speed
-                    print(f"🔍 Quick analyzing: {item['snippet']['channelTitle']}")
-                    channel_data = self._quick_channel_check(channel_id)
-                    if channel_data:
-                        channels_found.append(channel_data)
+                # Check if it's likely a Short (by title)
+                title = item['snippet']['title'].lower()
+                if '#shorts' in title or 'shorts' in title:
+                    channel_id = item['snippet']['channelId']
+                    
+                    if channel_id in seen_channels:
+                        continue
+                    seen_channels.add(channel_id)
+                    
+                    # FAST check - only analyze if video has good views
+                    view_count = int(item['statistics'].get('viewCount', 0))
+                    if view_count >= 100000:  # Reasonable threshold
+                        print(f"🔍 Quick analyzing: {item['snippet']['channelTitle']}")
+                        channel_data = self._quick_channel_check(channel_id)
+                        if channel_data:
+                            channels_found.append(channel_data)
             
             return channels_found
             
@@ -105,9 +108,9 @@ class YouTubeService:
             if not channel_stats:
                 return None
             
-            # Get only 5 recent videos for speed
-            recent_videos = self._get_few_recent_videos(channel_id, 5)
-            if len(recent_videos) < 3:
+            # Get only 3 recent videos for speed
+            recent_videos = self._get_few_recent_videos(channel_id, 3)
+            if len(recent_videos) < 2:
                 return None
             
             # Quick viral count in recent videos
@@ -116,16 +119,17 @@ class YouTubeService:
             # Estimate channel age from available data
             channel_age = self._estimate_age_from_videos(recent_videos)
             
-            print(f"📊 {channel_stats['name']}: {viral_count}/5 viral, {channel_age} days old")
+            print(f"📊 {channel_stats['name']}: {viral_count}/3 viral, {channel_age} days old")
             
-            # If they have 2+ viral in last 5, they might meet 3+ in last 10
-            if viral_count >= 2 and channel_age <= 120:  # 4 months buffer
+            # If they have good viral count and are relatively new
+            if viral_count >= 1 and channel_age <= 180:  # 6 months buffer
                 return {
                     **channel_stats,
                     'viral_video_count': viral_count,
                     'channel_age_days': channel_age,
-                    'confidence': 'medium',  # Not fully verified
-                    'note': 'Quick scan - may have 3+ viral in last 10'
+                    'avg_recent_views': sum(v['view_count'] for v in recent_videos) / len(recent_videos),
+                    'confidence': 'medium',
+                    'note': 'Quick scan - may meet viral criteria'
                 }
             
             return None
@@ -134,7 +138,7 @@ class YouTubeService:
             print(f"❌ Quick check error: {e}")
             return None
     
-    def _get_few_recent_videos(self, channel_id: str, max_videos: int = 5) -> List[Dict]:
+    def _get_few_recent_videos(self, channel_id: str, max_videos: int = 3) -> List[Dict]:
         """Get only a few recent videos for speed"""
         url = f"{self.base_url}/search"
         params = {
@@ -147,7 +151,7 @@ class YouTubeService:
         }
         
         try:
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=10)
             data = response.json()
             
             videos = []
@@ -213,7 +217,7 @@ class YouTubeService:
         }
         
         try:
-            response = requests.get(url, params=params, timeout=5)
+            response = requests.get(url, params=params, timeout=10)
             data = response.json()
             
             if not data.get('items'):
