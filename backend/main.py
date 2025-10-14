@@ -27,39 +27,54 @@ async def get_trending_channels():
     youtube = YouTubeService()
     
     try:
-        # Find emerging viral channels with enhanced discovery
-        print("🔍 Multi-niche hunting for emerging viral channels...")
-        channels = youtube.discover_emerging_channels(max_results=15)
+        print("🔍 Starting channel discovery...")
+        result = youtube.discover_emerging_channels(max_results=5)
         
-        # Filter to only show truly emerging channels
-        emerging = [c for c in channels if c.get('is_emerging')]
-        
-        if emerging:
-            print(f"🎯 Found {len(emerging)} emerging viral channels!")
-            return emerging
+        # Ensure consistent response format
+        if isinstance(result, dict):
+            return result
+        elif isinstance(result, list):
+            return {
+                "status": "success",
+                "message": f"Found {len(result)} channels",
+                "channels": result
+            }
         else:
-            return [{
-                "name": "Scanning for emerging channels...", 
-                "status": "Analyzing recent Shorts data across multiple niches",
-                "note": "This may take a few minutes to find channels matching your criteria"
-            }]
+            return {
+                "status": "error", 
+                "message": "Invalid response format from YouTube service",
+                "channels": []
+            }
+            
     except Exception as e:
-        print(f"Error: {e}")
-        return [{"name": f"API Error: {str(e)}", "error": True}]
+        print(f"❌ Error: {e}")
+        return {
+            "status": "error",
+            "message": f"System error: {str(e)}", 
+            "channels": []
+        }
 
 @app.get("/channels/untapped")
 async def get_untapped_channels():
     youtube = YouTubeService()
     
     try:
-        # Search for smaller channels
-        channels = youtube.discover_emerging_channels(max_results=10)
+        result = youtube.discover_emerging_channels(max_results=5)
         
-        # Filter for smaller channels (under 100k subs)
-        small_channels = [c for c in channels if c.get('subscriber_count', 0) < 100000]
-        return small_channels if small_channels else [{"name": "No untapped channels found", "subs": 0}]
+        if isinstance(result, dict):
+            return result
+        else:
+            return {
+                "status": "success",
+                "message": "Untapped channels search",
+                "channels": result if isinstance(result, list) else []
+            }
     except Exception as e:
-        return [{"name": f"Error: {str(e)}", "subs": 0}]
+        return {
+            "status": "error",
+            "message": f"Error: {str(e)}",
+            "channels": []
+        }
 
 @app.get("/test-youtube")
 async def test_youtube_api():
@@ -67,35 +82,39 @@ async def test_youtube_api():
     youtube = YouTubeService()
     
     try:
-        # Simple test - search for emerging channels
-        channels = youtube.discover_emerging_channels(max_results=1)
+        result = youtube.discover_emerging_channels(max_results=1)
         
-        if channels and not channels[0].get('error'):
-            return {
-                "status": "SUCCESS! Enhanced YouTube API is working!",
-                "channels_found": len(channels),
-                "sample_channel": channels[0]['name'],
-                "potential_score": channels[0].get('potential_score', 'N/A'),
-                "niche": channels[0].get('niche', 'N/A')
-            }
-        elif channels and channels[0].get('error'):
-            return {
-                "status": "YouTube API Error",
-                "error": channels[0]['name']
-            }
+        if isinstance(result, dict):
+            return result
         else:
-            return {"status": "No channels found but API is responding"}
+            return {
+                "status": "success",
+                "message": "API test completed",
+                "channels": result if isinstance(result, list) else []
+            }
             
     except Exception as e:
-        return {"status": f"YouTube API error: {str(e)}"}
+        return {
+            "status": "error", 
+            "message": f"YouTube API error: {str(e)}",
+            "channels": []
+        }
 
-@app.get("/niches")
-async def get_available_niches():
-    """Get list of available niches for discovery"""
-    youtube = YouTubeService()
+@app.get("/test-format")
+async def test_format():
+    """Test consistent response format"""
     return {
-        "available_niches": list(youtube.NICHE_KEYWORDS.keys()),
-        "total_niches": len(youtube.NICHE_KEYWORDS)
+        "status": "success",
+        "message": "Format test successful", 
+        "channels": [
+            {
+                "name": "Test Channel",
+                "subscriber_count": 10000,
+                "view_count": 500000,
+                "video_count": 25,
+                "status": "test_data"
+            }
+        ]
     }
 
 if __name__ == "__main__":
