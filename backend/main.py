@@ -63,16 +63,24 @@ async def test_youtube_api():
     youtube = YouTubeService()
     
     try:
-        # Test with a known channel
-        test_channel = youtube.get_channel_stats("UC_x5XG1OV2P6uZZ5FSM9Ttw")  # YouTube's channel
-        if test_channel:
+        # Simple test - search for one channel
+        channels = youtube.search_channels("#shorts", max_results=1)
+        
+        if channels and not channels[0].get('error'):
             return {
-                "status": "YouTube API is working!",
-                "test_channel": test_channel['title'],
-                "subscribers": test_channel['subscriber_count']
+                "status": "SUCCESS! YouTube API is working!",
+                "channels_found": len(channels),
+                "sample_channel": channels[0]['name'],
+                "subscribers": channels[0]['subscriber_count']
+            }
+        elif channels and channels[0].get('error'):
+            return {
+                "status": "YouTube API Error",
+                "error": channels[0]['name']
             }
         else:
-            return {"status": "YouTube API returned no data"}
+            return {"status": "No channels found but API is responding"}
+            
     except Exception as e:
         return {"status": f"YouTube API error: {str(e)}"}
 
